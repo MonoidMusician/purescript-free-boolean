@@ -3,9 +3,9 @@ module Data.BooleanAlgebra.CSS where
 import Prelude
 
 import Control.Apply (lift5)
-import Control.Bind (bindFlipped)
+import Data.Array (mapMaybe)
 import Data.BooleanAlgebra.NormalForm (NormalForm, toArrays, free)
-import Data.Foldable (all, foldM, foldMap, foldl, oneOfMap)
+import Data.Foldable (all, foldM, foldMap, foldl)
 import Data.FoldableWithIndex (foldMapWithIndex)
 import Data.HeytingAlgebra (ff, tt)
 import Data.Map (Map, singleton, unionWith)
@@ -16,6 +16,8 @@ import Data.String (joinWith)
 import Data.Traversable (sequence)
 import Data.Tuple (Tuple(..))
 
+-- | A single portion of a selector. Covers atoms such as matching an element
+-- | or class.
 data Select
   = Element String
   | Class String
@@ -26,6 +28,8 @@ data Select
 derive instance eqSelect :: Eq Select
 derive instance ordSelect :: Ord Select
 
+-- | An attribute name and specifics about how to match it, where `Nothing`
+-- | means it simply must exist.
 newtype AttrMatch = AttrMatch
   { attr :: String
   , match :: Maybe MatchValue
@@ -34,6 +38,7 @@ newtype AttrMatch = AttrMatch
 derive instance eqAttrMatch :: Eq AttrMatch
 derive instance ordAttrMatch :: Ord AttrMatch
 
+-- | Specifics about how to match the value of an attribute.
 newtype MatchValue = MatchValue
   { matchType :: MatchValueType
   , value :: String
@@ -43,6 +48,7 @@ newtype MatchValue = MatchValue
 derive instance eqMatchValue :: Eq MatchValue
 derive instance ordMatchValue :: Ord MatchValue
 
+-- | The type of match, exact or contains, etc.
 data MatchValueType
   = Exact -- [attr=value]
   | ListContains -- [attr~=value]
@@ -54,49 +60,63 @@ data MatchValueType
 derive instance eqMatchValueType :: Eq MatchValueType
 derive instance ordMatchValueType :: Ord MatchValueType
 
+-- | A full CSS selector represented as a free boolean algebra over the
+-- | selector atoms.
 newtype Selector = S (NormalForm Select)
 derive instance newtypeSelector :: Newtype Selector _
-derive newtype instance heytingAlgebraSelector :: HeytingAlgebra Selector
-derive newtype instance booleanAlgebraSelector :: BooleanAlgebra Selector
+derive newtype instance heytingAlgebrCSSelector :: HeytingAlgebra Selector
+derive newtype instance booleanAlgebrCSSelector :: BooleanAlgebra Selector
 derive newtype instance eqSelector :: Eq Selector
 derive newtype instance ordSelector :: Ord Selector
 instance showSelector :: Show Selector where
-  show = un S >>> normalize >>> print
+  show = un S >>> fromNF >>> print
 
+-- | Match an element.
 element :: String -> Selector
 element = S <<< free <<< Element
 
+-- | Match a list of classes.
 classes :: Array String -> Selector
 classes = all (S <<< free <<< Class)
 
+-- | A pseudo-class.
 pseudo :: String -> Selector
 pseudo = S <<< free <<< PseudoCls
 
+-- | Pseudo elements.
 pseudoElement :: String -> Selector
 pseudoElement = S <<< free <<< PseudoEl
 
+-- | Match anything and everything!
 anything :: Selector
 anything = tt
 
+-- | Match nothing ...
 nothing :: Selector
 nothing = ff
 
+-- | Match a `<div>` element.
 div :: Selector
 div = element "div"
 
+-- | Matches when an element is hovered over.
 hover :: Selector
 hover = pseudo "hover"
 
+-- | Matches the pseudo-element `::before` the given element.
 before :: Selector -> Selector
 before = conj $ pseudoElement "before"
 
+-- | Matches the pseudo-element `::after` the given element.
 after :: Selector -> Selector
 after = conj $ pseudoElement "after"
 
+-- | Match an element that has this attribute.
 attrExists :: String -> Selector
 attrExists attr = S $ free $ Attribute $ AttrMatch
   { attr, match: Nothing }
 
+-- | Match an element wtih an attribute having this value.
 exactAttr :: String -> String -> Selector
 exactAttr a v = attrValue a $ MatchValue
   { matchType: Exact
@@ -104,10 +124,12 @@ exactAttr a v = attrValue a $ MatchValue
   , insensitive: false
   }
 
+-- | More general matching, see `MatchValue` for specifics.
 attrValue :: String -> MatchValue -> Selector
 attrValue a v = S $ free $ Attribute $ AttrMatch { attr: a, match: Just v }
 
-type AThing =
+-- A single (conjunctive) selector
+type ASelector =
   { element :: Maybe
     { inverted :: Boolean
     , name :: String
@@ -120,10 +142,11 @@ type AThing =
     }
   , attrs :: Map AttrMatch Boolean
   }
+-- A disjunction of many selectors
+type SomeSelectors = Array ASelector
 
-type Items = Map String Boolean
-
-matchAll :: AThing
+-- Identity selector
+matchAll :: ASelector
 matchAll =
   { element: Nothing
   , classes: mempty
@@ -132,41 +155,41 @@ matchAll =
   , attrs: mempty
   }
 
-matchElement :: String -> AThing
+matchElement :: String -> ASelector
 matchElement = matchElement' false
-matchClass :: String -> AThing
+matchClass :: String -> ASelector
 matchClass = matchClass' false
-matchPseudoCls :: String -> AThing
+matchPseudoCls :: String -> ASelector
 matchPseudoCls = matchPseudoCls' false
-matchPseudoEl :: String -> AThing
+matchPseudoEl :: String -> ASelector
 matchPseudoEl = matchPseudoEl' false
-matchAttr :: AttrMatch -> AThing
+matchAttr :: AttrMatch -> ASelector
 matchAttr = matchAttr' false
 
-matchElement' :: Boolean -> String -> AThing
+matchElement' :: Boolean -> String -> ASelector
 matchElement' inverted name = matchAll
   { element = Just { inverted, name } }
 
-matchClass' :: Boolean -> String -> AThing
+matchClass' :: Boolean -> String -> ASelector
 matchClass' inverted name = matchAll
   { classes = singleton name inverted }
 
-matchPseudoCls' :: Boolean -> String -> AThing
+matchPseudoCls' :: Boolean -> String -> ASelector
 matchPseudoCls' inverted name = matchAll
   { pseudoCls = singleton name inverted }
 
-matchPseudoEl' :: Boolean -> String -> AThing
+matchPseudoEl' :: Boolean -> String -> ASelector
 matchPseudoEl' inverted name = matchAll
   { pseudoEl = Just { inverted, name } }
 
-matchAttr' :: Boolean -> AttrMatch -> AThing
+matchAttr' :: Boolean -> AttrMatch -> ASelector
 matchAttr' inverted match = matchAll
   { attrs = singleton match inverted }
 
-selectToMatch :: Select -> AThing
+selectToMatch :: Select -> ASelector
 selectToMatch = selectToMatch' <<< (Tuple <@> false)
 
-selectToMatch' :: Tuple Select Boolean -> AThing
+selectToMatch' :: Tuple Select Boolean -> ASelector
 selectToMatch' (Tuple v i) = case v of
   Element s -> matchElement' i s
   Class s -> matchClass' i s
@@ -174,6 +197,7 @@ selectToMatch' (Tuple v i) = case v of
   PseudoEl s -> matchPseudoEl' i s
   Attribute s -> matchAttr' i s
 
+-- Prevent inconsistent values from appearing in the map
 dedup :: forall k v. Ord k => Eq v => Map k v -> Map k v -> Maybe (Map k v)
 dedup l r = sequence $ unionWith merger (l <#> Just) (r <#> Just)
   where
@@ -181,8 +205,11 @@ dedup l r = sequence $ unionWith merger (l <#> Just) (r <#> Just)
     merger (Just a) (Just b) | a == b = Just a
     merger _ _ = Nothing
 
-combine :: AThing -> AThing -> Maybe AThing
-combine a b = lift5
+-- Conjoin two selectors, returning `Nothing` if the result is provably `false`
+-- (e.g. if it would have to match two different element types or pseudo-element
+-- types at once).
+conjoin :: ASelector -> ASelector -> Maybe ASelector
+conjoin a b = lift5
   { element: _, attrs: _, classes: _, pseudoCls: _, pseudoEl: _ }
   (combE a.element b.element)
   (dedup a.attrs b.attrs)
@@ -199,28 +226,29 @@ combine a b = lift5
         _, _ | a.name == b.name -> Just l
              | otherwise -> Nothing
 
-combineFold :: Array AThing -> Maybe AThing
-combineFold = foldl combine' (Just matchAll) where
-  combine' :: Maybe AThing -> AThing -> Maybe AThing
-  combine' = flip (foldM combine)
+-- Conjoin many selectors
+conjoinFold :: SomeSelectors -> Maybe ASelector
+conjoinFold = foldl (flip (foldM conjoin)) (Just matchAll)
 
-normalize :: NormalForm Select -> Array AThing
-normalize = unwrap >>> toArrays >>> bindFlipped
-  (map selectToMatch' >>> combineFold >>> oneOfMap pure)
+fromNF :: NormalForm Select -> SomeSelectors
+fromNF = unwrap >>> toArrays >>> mapMaybe
+  (map selectToMatch' >>> conjoinFold)
 
-print :: Array AThing -> String
+print :: SomeSelectors -> String
 print = ensure <<< joinWith ", " <<< map print1 where
   -- An empty string means false, which we represent with :not(*)
   ensure "" = ":not(*)"
   ensure s = s
   invert false n = n
   invert true n = ":not(" <> n <> ")"
-  print1 :: AThing -> String
+  print1 :: ASelector -> String
   print1 v = e <> as <> c <> pc <> pe where
+    -- Print the element, or *
     e = case v.element of
       Nothing -> "*"
       Just { inverted, name } ->
         invert inverted name
+    -- Print attributes in brackets[]
     as = v.attrs # foldMapWithIndex \(AttrMatch { attr, match }) i ->
       invert i case match of
         Nothing -> "[" <> attr <> "]"
@@ -235,9 +263,12 @@ print = ensure <<< joinWith ", " <<< map print1 where
               EndsWith -> "$"
               LangCode -> "|"
           in "[" <> attr <> op <> "=" <> show value <> i' <> "]"
+    -- Print classes, preceded by periods.
     c = v.classes # foldMapWithIndex \name i ->
       invert i ("." <> name)
+    -- Print pseudo-classes, preceded by colons:
     pc = v.pseudoCls # foldMapWithIndex \name i ->
       invert i (":" <> name)
+    -- Print the pseudo-element (if applicable), preceded by a double colon::
     pe = v.pseudoEl # foldMap \{ inverted, name } ->
       invert inverted ("::" <> name)
