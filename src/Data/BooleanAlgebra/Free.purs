@@ -32,7 +32,7 @@ liftFree f (Or a b) = liftFree f a || liftFree f b
 liftFree _ True = tt
 
 lowerFree :: forall a b. BooleanAlgebra b => (Free a -> b) -> a -> b
-lowerFree f a = f (Id a)
+lowerFree f a = f (free a)
 
 dm :: Free ~> Free
 dm True = ff

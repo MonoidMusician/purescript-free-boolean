@@ -2,20 +2,19 @@ module Data.BooleanAlgebra.CSS where
 
 import Prelude
 
-import Control.Apply (lift2, lift5)
-import Control.MonadZero (class MonadZero)
-import Control.Plus (class Plus, empty, (<|>))
-import Data.BooleanAlgebra.Free (Free(..), free, simplify)
-import Data.Foldable (all, foldMap, foldl, oneOfMap)
-import Data.FoldableWithIndex (class FoldableWithIndex, foldMapWithIndex)
+import Control.Apply (lift5)
+import Control.Bind (bindFlipped)
+import Data.BooleanAlgebra.NormalForm (NormalForm, toArrays, free)
+import Data.Foldable (all, foldM, foldMap, foldl, oneOfMap)
+import Data.FoldableWithIndex (foldMapWithIndex)
 import Data.HeytingAlgebra (ff, tt)
 import Data.Map (Map, singleton, unionWith)
 import Data.Maybe (Maybe(..))
 import Data.Monoid (mempty)
-import Data.Monoid.Alternate (Alternate(..))
-import Data.Newtype (class Newtype, un)
+import Data.Newtype (class Newtype, un, unwrap)
 import Data.String (joinWith)
 import Data.Traversable (sequence)
+import Data.Tuple (Tuple(..))
 
 data Select
   = Element String
@@ -55,12 +54,14 @@ data MatchValueType
 derive instance eqMatchValueType :: Eq MatchValueType
 derive instance ordMatchValueType :: Ord MatchValueType
 
-newtype Selector = S (Free Select)
+newtype Selector = S (NormalForm Select)
 derive instance newtypeSelector :: Newtype Selector _
 derive newtype instance heytingAlgebraSelector :: HeytingAlgebra Selector
 derive newtype instance booleanAlgebraSelector :: BooleanAlgebra Selector
+derive newtype instance eqSelector :: Eq Selector
+derive newtype instance ordSelector :: Ord Selector
 instance showSelector :: Show Selector where
-  show = un S >>> simplify >>> normalize >>> print
+  show = un S >>> normalize >>> print
 
 element :: String -> Selector
 element = S <<< free <<< Element
@@ -162,13 +163,16 @@ matchAttr' :: Boolean -> AttrMatch -> AThing
 matchAttr' inverted match = matchAll
   { attrs = singleton match inverted }
 
--- oneOfMapWithIndex ::
-oneOfMapWithIndex ::
-  forall f i a g b.
-    FoldableWithIndex f i =>
-    Plus g =>
-  (f -> a -> g b) -> i a -> g b
-oneOfMapWithIndex f = un Alternate <<< foldMapWithIndex (compose Alternate <<< f)
+selectToMatch :: Select -> AThing
+selectToMatch = selectToMatch' <<< (Tuple <@> false)
+
+selectToMatch' :: Tuple Select Boolean -> AThing
+selectToMatch' (Tuple v i) = case v of
+  Element s -> matchElement' i s
+  Class s -> matchClass' i s
+  PseudoCls s -> matchPseudoCls' i s
+  PseudoEl s -> matchPseudoEl' i s
+  Attribute s -> matchAttr' i s
 
 dedup :: forall k v. Ord k => Eq v => Map k v -> Map k v -> Maybe (Map k v)
 dedup l r = sequence $ unionWith merger (l <#> Just) (r <#> Just)
@@ -195,45 +199,14 @@ combine a b = lift5
         _, _ | a.name == b.name -> Just l
              | otherwise -> Nothing
 
-combineAll :: forall f. MonadZero f => f AThing -> f AThing -> f AThing
-combineAll a b = lift2 combine a b >>= oneOfMap pure
+combineFold :: Array AThing -> Maybe AThing
+combineFold = foldl combine' (Just matchAll) where
+  combine' :: Maybe AThing -> AThing -> Maybe AThing
+  combine' = flip (foldM combine)
 
-invert :: Array AThing -> Array AThing
-invert = foldl combineAll (pure matchAll) <<< map invert1
-  where
-    invertElement { inverted, name } = pure $
-      matchElement' (not inverted) name
-    invertAttr match inverted = pure $
-      matchAttr' (not inverted) match
-    invertClass name inverted = pure $
-      matchClass' (not inverted) name
-    invertPseudoCls name inverted = pure $
-      matchPseudoCls' (not inverted) name
-    invertPseudoEl { inverted, name } = pure $
-      matchPseudoEl' (not inverted) name
-    invert1 :: AThing -> Array AThing
-    invert1 a =
-      oneOfMap invertElement a.element
-      <|> oneOfMapWithIndex invertAttr a.attrs
-      <|> oneOfMapWithIndex invertClass a.classes
-      <|> oneOfMapWithIndex invertPseudoCls a.pseudoCls
-      <|> oneOfMap invertPseudoEl a.pseudoEl
-
--- Disjunctive normal form
-normalize :: Free Select -> Array AThing
-normalize True = pure matchAll
-normalize (Id a) = case a of
-  Element s -> pure $ matchElement s
-  Class s -> pure $ matchClass s
-  PseudoCls s -> pure $ matchPseudoCls s
-  PseudoEl s -> pure $ matchPseudoEl s
-  Attribute s -> pure $ matchAttr s
-normalize (Not a) = case a of
-  Not b -> normalize b
-  True -> empty
-  _ -> invert (normalize a)
-normalize (Or a b) = normalize a <|> normalize b
-normalize (And a b) = normalize a `combineAll` normalize b
+normalize :: NormalForm Select -> Array AThing
+normalize = unwrap >>> toArrays >>> bindFlipped
+  (map selectToMatch' >>> combineFold >>> oneOfMap pure)
 
 print :: Array AThing -> String
 print = ensure <<< joinWith ", " <<< map print1 where

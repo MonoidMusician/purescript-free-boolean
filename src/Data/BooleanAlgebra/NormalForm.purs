@@ -3,7 +3,7 @@ module Data.BooleanAlgebra.NormalForm where
 import Prelude
 
 import Control.Bind (bindFlipped)
-import Data.Foldable (oneOfMap) as TF
+import Data.Foldable (all, any, oneOfMap) as TF
 import Data.Function (on)
 import Data.HeytingAlgebra (ff, tt)
 import Data.Lens (Iso', iso)
@@ -56,6 +56,14 @@ overArrays = iso toArrays fromArrays
 free :: forall a. Ord a => a -> NormalForm a
 free = NF <<< S.singleton <<< flip M.singleton false
 
+liftFree :: forall a b. Ord a => BooleanAlgebra b => (a -> b) -> NormalForm a -> b
+liftFree f (NF nf) = TF.any (TF.all f') (toArrays nf) where
+  f' (Tuple v false) = f v
+  f' (Tuple v true) = not f v
+
+lowerFree :: forall a b. Ord a => BooleanAlgebra b => (NormalForm a -> b) -> a -> b
+lowerFree f a = f (free a)
+
 normalize :: forall a. Ord a => NormalForm a -> NormalForm a
 normalize = not not
 
@@ -64,8 +72,10 @@ instance nfHeytingAlgebra :: Ord a => HeytingAlgebra (NormalForm a) where
   ff = NF S.empty
   not = _Newtype $ overArrays deMorgan where
     -- sequence distributes conjunctions and disjunctions over each other
-    -- while map (map (map not)) actually negates it
+    -- while map (map (map not)) actually negates the terms
     deMorgan = TF.traverse (map (map not))
   disj = over2 NF append
   conj m1 m2 = not (not m1 || not m2)
   implies a b = not a || b
+
+instance nfBooleanAlgebra :: Ord a => BooleanAlgebra (NormalForm a)
