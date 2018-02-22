@@ -11,7 +11,8 @@
     "purescript-console": "^3.0.0",
     "purescript-semirings": "^4.0.0",
     "purescript-maps": "^3.6.0",
-    "purescript-strings": "^3.5.0"
+    "purescript-strings": "^3.5.0",
+    "purescript-profunctor-lenses": "^3.8.0"
   },
   "devDependencies": {
     "purescript-psci-support": "^3.0.0"
