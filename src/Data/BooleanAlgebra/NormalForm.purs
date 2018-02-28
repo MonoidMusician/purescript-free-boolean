@@ -74,7 +74,9 @@ instance nfHeytingAlgebra :: Ord a => HeytingAlgebra (NormalForm a) where
     -- sequence distributes conjunctions and disjunctions over each other
     -- while map (map (map not)) actually negates the terms
     deMorgan = TF.traverse (map (map not))
+  -- in disjunctive normal form, just need to append all the clauses together
   disj = over2 NF append
+  -- could be optimized, but go through `||` instead
   conj m1 m2 = not (not m1 || not m2)
   implies a b = not a || b
 
