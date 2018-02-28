@@ -12,7 +12,7 @@ import Data.BooleanAlgebra.NormalForm (NormalForm, toArrays, free)
 import Data.Foldable (all, foldM, foldMap, foldl, oneOfMap)
 import Data.FoldableWithIndex (foldMapWithIndex)
 import Data.HeytingAlgebra (ff, tt)
-import Data.InterTsil (InterTsil(..), app)
+import Data.InterTsil (InterTsil(..), concat)
 import Data.Lens (Iso', iso)
 import Data.Map (Map, singleton, unionWith)
 import Data.Maybe (Maybe(..))
@@ -239,7 +239,7 @@ dist :: forall a. Related a -> a -> Related a
 dist (Related m) s = Related (More m true s)
 
 appR :: forall a. Related a -> Boolean -> Related a -> Related a
-appR (Related m1) r (Related m2) = Related (app m1 r m2)
+appR (Related m1) r (Related m2) = Related (concat m1 r m2)
 
 printHoriz :: Horiz -> String
 printHoriz (Related (One (Atom s))) = print1 s

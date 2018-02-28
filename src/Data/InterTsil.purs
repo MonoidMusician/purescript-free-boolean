@@ -2,10 +2,13 @@ module Data.InterTsil where
 
 import Data.Bifunctor (class Bifunctor, bimap, rmap)
 import Data.Bitraversable (class Bifoldable, class Bitraversable, bifoldMap, bifoldl, bifoldlDefault, bifoldr, bifoldrDefault, bisequenceDefault, bitraverse)
+import Data.Either (Either(..))
+import Data.Lens (Lens', lens')
 import Data.Monoid (mempty)
 import Data.Semigroup.Foldable (class Foldable1, fold1Default, foldMap1)
 import Data.Semigroup.Traversable (class Traversable1, sequence1Default, traverse1)
 import Data.Traversable (class Foldable, class Traversable)
+import Data.Tuple (Tuple(..))
 import Prelude (class Eq, class Functor, class Ord, flip, id, pure, (<$>), (<*>), (<>), (<@>))
 
 data InterTsil a b = One b | More (InterTsil a b) a b
@@ -44,10 +47,19 @@ instance bitraversableInterTsil :: Bitraversable InterTsil where
   bitraverse f g (More m a b) = More <$> bitraverse f g m <*> f a <*> g b
   bisequence x = bisequenceDefault x
 
-last :: forall a b. InterTsil a b -> b
-last (One s) = s
-last (More _ _ s) = s
+_last :: forall a b. Lens' (InterTsil a b) b
+_last = lens' case _ of
+  One s -> Tuple s \s' -> One s'
+  More m a s -> Tuple s \s' -> More m a s'
 
-app :: forall a b. InterTsil a b -> a -> InterTsil a b -> InterTsil a b
-app m r (One s) = More m r s
-app m r (More m1 r1 s) = More (app m r m1) r1 s
+concat :: forall a b. InterTsil a b -> a -> InterTsil a b -> InterTsil a b
+concat m r (One s) = More m r s
+concat m r (More m1 r1 s) = More (concat m r m1) r1 s
+
+dimensionalize :: forall a b c d.
+  (a -> Either b c) -> InterTsil a d ->
+  InterTsil b (InterTsil c d)
+dimensionalize f (One d) = One (One d)
+dimensionalize f (More m a d) = case f a of
+  Left b -> More (dimensionalize f m) b (One d)
+  Right c -> _last (\m' -> More m' c d) (dimensionalize f m)
