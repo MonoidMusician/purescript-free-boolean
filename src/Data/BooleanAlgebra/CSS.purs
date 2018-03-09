@@ -3,21 +3,26 @@ module Data.BooleanAlgebra.CSS where
 import Prelude
 
 import Control.Alt ((<|>))
-import Control.Apply (lift5)
+import Control.Bind (bindFlipped)
 import Control.MonadPlus (class MonadPlus, empty, guard)
+import Data.Array (fromFoldable)
 import Data.BooleanAlgebra.NormalForm (NormalForm, toArrays, free)
 import Data.Foldable (all, foldMap, foldl, oneOfMap)
 import Data.FoldableWithIndex (foldMapWithIndex)
 import Data.HeytingAlgebra (ff, tt)
 import Data.InterTsil (InterTsil(..), concat)
 import Data.Lens (Iso', iso)
+import Data.List as List
 import Data.Map (Map, singleton, unionWith)
-import Data.Maybe (Maybe(..))
-import Data.Monoid (mempty)
+import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Monoid (class Monoid, mempty)
 import Data.Newtype (class Newtype, un, unwrap)
+import Data.Record (get, insert)
 import Data.String (joinWith)
+import Data.Symbol (class IsSymbol, SProxy(..))
 import Data.Traversable (class Foldable, sequence)
 import Data.Tuple (Tuple(..))
+import Type.Row (class ListToRow, class RowLacks, class RowToList, Cons, Nil, RLProxy(..), RProxy(..), kind RowList)
 
 -- | A single portion of a selector. Covers atoms such as matching an element
 -- | or class.
@@ -183,9 +188,88 @@ newtype Atom = Atom ASelector
 derive instance newtypeAtom :: Newtype Atom _
 derive instance eqAtom :: Eq Atom
 
-class Eq c <= Combinatorial c where
+-- | A class for expressing types that express quasi conjunctive (or
+-- | disjunctive) clauses in a more structured way than `Free`.
+-- |
+-- | Laws:
+-- |   - identity: `combine a neutral = pure a = combine neutral a`
+-- |   - idempotence: `combine a a = pure a`
+-- |   - commutativity: `combine a b` has the same elements as `combine b a`
+-- |   - associativity: `combine a =<< combine b c` has the same elements as
+-- |                    `combine a b >>= (combine <@> c)`
+
+-- fun fact: īdem (m.) eadem (f.) idem (n.) means “the same” in Latin
+class Combinatorial c where
   combine :: forall f. MonadPlus f => c -> c -> f c
   neutral :: c
+
+-- subsumes a a == E
+-- subsumes a b == LSR && subsumes b c == LSR => subsumes a c == LSR
+-- (subsumes a b == LSR) = (subsumes b a == RSL)
+-- else (for E, T, I): subsumes a b = subsumes b a
+class (Eq c, Combinatorial c) <= Subsumes c where
+  subsumes :: c -> c -> S
+
+data S
+  -- they are equal: a == b
+  = E
+  -- left subsumes right: a || b == a
+  | LSR
+  -- right subsumes left: a || b == b
+  | RSL
+  -- their disjunction is a tautology: a || b == tt
+  | T
+  -- independent
+  | I
+
+instance semigroupS :: Semigroup S where
+  append T _ = T
+  append _ T = T
+  append E E = E
+  append E s = s
+  append s E = s
+  append I _ = I
+  append _ I = I
+  append LSR LSR = LSR
+  append RSL RSL = RSL
+  append LSR RSL = I
+  append RSL LSR = I
+
+instance monoidS :: Monoid S where
+  mempty = E
+
+data ReSult c = Taut | Uno c | Duo c c
+
+subsume :: forall c. Subsumes c => c -> c -> ReSult c
+subsume a b = case subsumes a b of
+  T -> Taut
+  I -> Duo a b
+  LSR -> Uno a
+  _ -> Uno b
+
+subsumptite :: forall c. Subsumes c => Array c -> Array c
+subsumptite elements = fromMaybe [] $ foldl f (Just []) elements where
+  f Nothing _ = Nothing
+  f (Just removed) c1 =
+    let
+      subres = foldl g (Just List.Nil) elements
+      g Nothing _ = Nothing
+      g (Just more) c2 = case subsumes c1 c2 of
+        LSR -> Just (List.Cons c2 more)
+        E -> Just (List.Cons c2 more)
+        T -> Nothing
+        _ -> Just more
+    in subres <#> \more -> removed <> fromFoldable more
+
+boolean :: forall c. Subsumes c => Array (Array c) -> Array c
+boolean = subsumptite <<< bindFlipped combineFold
+
+instance combinatorialRecord ::
+  ( RowToList r rl
+  , CombinatorialRL rl r r
+  ) => Combinatorial (Record r) where
+    combine = combineRL (RLProxy :: RLProxy rl)
+    neutral = neutralRL (RLProxy :: RLProxy rl) (RProxy :: RProxy r)
 
 -- Conjoin many conjunctive clauses together, doing case analysis as necesssary
 -- or dropping impossible conjunctions.
@@ -196,30 +280,65 @@ combineFold ::
   f c -> g c
 combineFold = foldl (\fb a -> fb >>= \b -> combine b a) (pure neutral)
 
+combine3 :: forall f c. Combinatorial c => MonadPlus f => c -> c -> c -> f c
+combine3 a b c = combine a b >>= combine c -- combine a b >>= (combine <@> c)
+
+class ListToRow rl r <= CombinatorialRL (rl :: RowList) (rr :: # Type) (r :: # Type) | rl -> r where
+  combineRL :: forall f. MonadPlus f => RLProxy rl -> Record rr -> Record rr -> f (Record r)
+  neutralRL :: RLProxy rl -> RProxy rr -> Record r
+
+instance combNil :: CombinatorialRL Nil rr () where
+  combineRL _ _ _ = pure {}
+  neutralRL _ _ = {}
+instance combCons ::
+  ( IsSymbol s
+  , Combinatorial t
+  , CombinatorialRL rl rr r
+  , RowCons s t r r'
+  , RowLacks s r
+  , RowCons s t ignored rr
+  ) => CombinatorialRL (Cons s t rl) rr r' where
+    combineRL _ r1 r2 = insert s
+      <$> combine (get s r1) (get s r2)
+      <*> ofRecordr (combineRL (RLProxy :: RLProxy rl) r1 r2)
+      where
+        ofRecordr = id :: forall f. f (Record r) -> f (Record r)
+        s = SProxy :: SProxy s
+    neutralRL _ rp = insert (SProxy :: SProxy s) neutral (neutralRL (RLProxy :: RLProxy rl) rp :: Record r)
+
 instance combinatorialUnit :: Combinatorial Unit where
   combine _ _ = pure neutral
   neutral = unit
+instance subsumesUnit :: Subsumes Unit where
+  subsumes _ _ = E
 
-instance combinatorialAtom :: Combinatorial Atom where
-  combine (Atom a) (Atom b) = Atom <$> lift5
-    { element: _, attrs: _, classes: _, pseudoCls: _, pseudoEl: _ }
-    (combine a.element b.element)
-    (combine a.attrs b.attrs)
-    (combine a.classes b.classes)
-    (combine a.pseudoCls b.pseudoCls)
-    (combine a.pseudoEl b.pseudoEl)
-  neutral = matchAll
+derive newtype instance combinatorialAtom :: Combinatorial Atom
 
 instance combinatorialSingle :: Eq a => Combinatorial (Single a) where
   neutral = Single Nothing
-  combine (Single Nothing) v = pure v
-  combine v (Single Nothing) = pure v
   combine l@(Single (Just a)) r@(Single (Just b)) =
     case a.inverted, b.inverted of
+      -- l && !r == l
       false, true -> pure l
+      -- !l && r == r
       true, false -> pure r
+      -- x && x == x
+      -- y && z == ff (y /= z)
       _, _ | a.value == b.value -> pure l
            | otherwise -> empty
+  combine (Single Nothing) v = pure v
+  combine v (Single Nothing) = pure v
+instance subsumesSingle :: Eq a => Subsumes (Single a) where
+  subsumes (Single l) (Single r) = case l, r of
+    Nothing, Nothing -> E
+    Just _, Nothing -> RSL
+    Nothing, Just _ -> LSR
+    Just a, Just b
+      | a.value == b.value ->
+        if a.inverted == b.inverted
+          then E
+          else T
+      | otherwise -> I
 
 instance combinatorialSeveral :: Ord a => Combinatorial (Several a) where
   neutral = Several mempty
@@ -227,8 +346,8 @@ instance combinatorialSeveral :: Ord a => Combinatorial (Several a) where
     oneOfMap (pure <<< Several) $ sequence $
       unionWith agreement (a <#> Just) (b <#> Just)
     where
-      agreement (Just true) (Just true) = Just true
       agreement (Just false) (Just false) = Just false
+      agreement (Just true) (Just true) = Just true
       agreement _ _ = Nothing
 
 newtype Related a = Related (InterTsil Boolean a)
