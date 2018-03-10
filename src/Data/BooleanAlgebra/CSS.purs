@@ -4,20 +4,21 @@ import Prelude
 
 import Control.Alt ((<|>))
 import Control.Bind (bindFlipped)
+import Control.Comonad (extract)
 import Control.MonadPlus (class MonadPlus, empty, guard)
-import Data.Array (fromFoldable)
+import Data.Array (filter, mapWithIndex)
 import Data.BooleanAlgebra.NormalForm (NormalForm, toArrays, free)
 import Data.Foldable (all, foldMap, foldl, oneOfMap)
-import Data.FoldableWithIndex (foldMapWithIndex)
+import Data.FoldableWithIndex (foldMapWithIndex, foldlWithIndex)
 import Data.HeytingAlgebra (ff, tt)
 import Data.InterTsil (InterTsil(..), concat)
 import Data.Lens (Iso', iso)
-import Data.List as List
 import Data.Map (Map, singleton, unionWith)
-import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Maybe (Maybe(..))
 import Data.Monoid (class Monoid, mempty)
 import Data.Newtype (class Newtype, un, unwrap)
 import Data.Record (get, insert)
+import Data.Set as Set
 import Data.String (joinWith)
 import Data.Symbol (class IsSymbol, SProxy(..))
 import Data.Traversable (class Foldable, sequence)
@@ -171,6 +172,10 @@ instance eqSingle :: Eq a => Eq (Single a) where
     a.inverted == b.inverted && a.value == b.value
   eq (Single Nothing) (Single Nothing) = true
   eq _ _ = false
+instance showSingle :: Show a => Show (Single a) where
+  show (Single Nothing) = "neutral"
+  show (Single (Just { inverted, value })) =
+    (if inverted then "!" else "") <> show value
 
 newtype Several a = Several (Map a Boolean)
 derive instance newtypeSeveral :: Newtype (Several a) _
@@ -204,6 +209,7 @@ class Combinatorial c where
   neutral :: c
 
 -- subsumes a a == E
+-- (subsumes a neutral) = if a == neutral then E else LSR
 -- subsumes a b == LSR && subsumes b c == LSR => subsumes a c == LSR
 -- (subsumes a b == LSR) = (subsumes b a == RSL)
 -- else (for E, T, I): subsumes a b = subsumes b a
@@ -211,16 +217,22 @@ class (Eq c, Combinatorial c) <= Subsumes c where
   subsumes :: c -> c -> S
 
 data S
-  -- they are equal: a == b
+  -- they are equal: a == b, or a <=> b
   = E
-  -- left subsumes right: a || b == a
+  -- left subsumes right: a || b == a, or a => b
   | LSR
-  -- right subsumes left: a || b == b
+  -- right subsumes left: a || b == b, or b => a
   | RSL
   -- their disjunction is a tautology: a || b == tt
   | T
   -- independent
   | I
+instance showS :: Show S where
+  show E = "Equal"
+  show LSR = "Left subsumes right"
+  show RSL = "Right subsumes left"
+  show T = "Complementary"
+  show I = "Independent"
 
 instance semigroupS :: Semigroup S where
   append T _ = T
@@ -239,6 +251,10 @@ instance monoidS :: Monoid S where
   mempty = E
 
 data ReSult c = Taut | Uno c | Duo c c
+instance showReSult :: Show c => Show (ReSult c) where
+  show Taut = "[]"
+  show (Uno c) = show [c]
+  show (Duo c1 c2) = show [c1, c2]
 
 subsume :: forall c. Subsumes c => c -> c -> ReSult c
 subsume a b = case subsumes a b of
@@ -248,18 +264,21 @@ subsume a b = case subsumes a b of
   _ -> Uno b
 
 subsumptite :: forall c. Subsumes c => Array c -> Array c
-subsumptite elements = fromMaybe [] $ foldl f (Just []) elements where
-  f Nothing _ = Nothing
-  f (Just removed) c1 =
+subsumptite elements = finally $ foldlWithIndex f (Just mempty) elements where
+  f _ Nothing _ = Nothing
+  f i (Just removed) c1 =
     let
-      subres = foldl g (Just List.Nil) elements
-      g Nothing _ = Nothing
-      g (Just more) c2 = case subsumes c1 c2 of
-        LSR -> Just (List.Cons c2 more)
-        E -> Just (List.Cons c2 more)
+      subres = foldlWithIndex g (Just mempty) elements
+      g _ Nothing _ = Nothing
+      g j (Just more) c2 = case subsumes c1 c2 of
+        LSR -> Just (Set.insert j more)
+        E | j > i -> Just (Set.insert j more)
         T -> Nothing
         _ -> Just more
-    in subres <#> \more -> removed <> fromFoldable more
+    in subres <#> \more -> removed <> more
+  finally Nothing = []
+  finally (Just removed) = map extract $ elements # mapWithIndex Tuple # filter
+    \(Tuple e _) -> not Set.member e removed
 
 boolean :: forall c. Subsumes c => Array (Array c) -> Array c
 boolean = subsumptite <<< bindFlipped combineFold
@@ -314,14 +333,32 @@ instance subsumesUnit :: Subsumes Unit where
 
 derive newtype instance combinatorialAtom :: Combinatorial Atom
 
+{-
+a = single.mk "a"
+_a = single.inv a
+b = single.mk "b"
+_b = single.inv b
+-}
+single =
+  { mk: \value -> Single (Just { inverted: false, value })
+  , inv: case _ of
+      Single Nothing -> Single Nothing
+      Single (Just { inverted, value }) ->
+        Single (Just { inverted: not inverted, value })
+  }
+
 instance combinatorialSingle :: Eq a => Combinatorial (Single a) where
   neutral = Single Nothing
   combine l@(Single (Just a)) r@(Single (Just b)) =
     case a.inverted, b.inverted of
+      -- x && !x == ff
       -- l && !r == l
-      false, true -> pure l
+      false, true | a.value /= b.value -> pure l
+                  | otherwise -> empty
+      -- !x && x == ff
       -- !l && r == r
-      true, false -> pure r
+      true, false | a.value /= b.value -> pure r
+                  | otherwise -> empty
       -- x && x == x
       -- y && z == ff (y /= z)
       _, _ | a.value == b.value -> pure l
