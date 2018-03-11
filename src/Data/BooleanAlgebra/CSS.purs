@@ -234,14 +234,18 @@ instance showS :: Show S where
   show T = "Complementary"
   show I = "Independent"
 
+-- commutative
 instance semigroupS :: Semigroup S where
+  -- strongly annihilate
   append T _ = T
   append _ T = T
-  append E E = E
-  append E s = s
-  append s E = s
+  -- weakly annihilate
   append I _ = I
   append _ I = I
+  -- identity
+  append E s = s
+  append s E = s
+  -- complements
   append LSR LSR = LSR
   append RSL RSL = RSL
   append LSR RSL = I
@@ -339,6 +343,7 @@ _a = single.inv a
 b = single.mk "b"
 _b = single.inv b
 -}
+single :: { mk :: forall a. a -> Single a, inv :: forall a. Single a -> Single a }
 single =
   { mk: \value -> Single (Just { inverted: false, value })
   , inv: case _ of
@@ -419,6 +424,19 @@ instance combinatorialRelated :: Combinatorial a => Combinatorial (Related a) wh
           btwn = guard r2 *> inner m1 (More m2 true neutral)
           rest = inner m1 m2 <|> go m2
         in More <$> (btwn <|> rest) <@> r2 <@> s2
+
+instance subsumesRelated :: Subsumes a => Subsumes (Related a) where
+  subsumes (Related a) (Related b) = case a, b of
+    One s1, One s2 -> subsumes s1 s2
+    One s1, More m2 r2 s2 -> LSR <> subsumes s1 s2
+    More m1 r1 s1, One s2 -> RSL <> subsumes s1 s2
+    More m1 r1 s1, More m2 r2 s2 ->
+      subsumes (Related m1) (Related m2) <>
+      subsumes s1 s2 <>
+      case r1, r2 of
+        true, false -> LSR
+        false, true -> RSL
+        _, _ -> mempty
 
 type Horiz = Related Atom
 type Vert = Related Horiz
@@ -501,7 +519,7 @@ selectToMatch' (Tuple v i) = case v of
   Attribute s -> matchAttr' i s
 
 fromNF :: NormalForm Select -> SomeSelectors
-fromNF = unwrap >>> toArrays >=> map selectToMatch' >>> combineFold
+fromNF = not not >>> unwrap >>> toArrays >=> map selectToMatch' >>> combineFold
 
 ensure :: String -> String -> String
 ensure s "" = s
