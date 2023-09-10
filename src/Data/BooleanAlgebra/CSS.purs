@@ -485,7 +485,7 @@ printVert (Related (More m r h)) =
   <> printHoriz h
 
 printVerts :: Array Vert -> String
-printVerts = ensure "*" <<< joinWith ", " <<< map printVert
+printVerts = ensure ":not(*)" <<< joinWith ", " <<< map printVert
 
 -- A disjunction of Several selectors
 type SomeSelectors = Array Atom
