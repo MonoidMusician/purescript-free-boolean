@@ -7,12 +7,13 @@ import Control.Bind (bindFlipped)
 import Control.Comonad (extract)
 import Control.MonadPlus (class MonadPlus, empty, guard)
 import Data.Array (filter, mapWithIndex)
+import Data.Bifunctor (lmap)
 import Data.BooleanAlgebra.NormalForm (NormalForm, toArrays, free)
 import Data.Foldable (all, foldMap, foldl, oneOfMap)
 import Data.FoldableWithIndex (foldMapWithIndex, foldlWithIndex)
 import Data.HeytingAlgebra (ff, tt)
 import Data.InterTsil (InterTsil(..), concat)
-import Data.Lens (Iso', iso)
+import Data.Lens (Iso', iso, view)
 import Data.Map (Map, singleton, unionWith)
 import Data.Maybe (Maybe(..))
 import Data.Newtype (class Newtype, un, unwrap)
@@ -53,8 +54,8 @@ newtype Rel = Rel { vertical :: Boolean, immediate :: Boolean }
 derive instance eqRel :: Eq Rel
 derive instance ordRel :: Ord Rel
 
-rel :: Iso' Relation Rel
-rel = iso from to where
+relIso :: Iso' Relation Rel
+relIso = iso from to where
   from = case _ of
     Child      -> Rel { vertical: true,  immediate: true }
     Descendant -> Rel { vertical: true,  immediate: false }
@@ -65,6 +66,17 @@ rel = iso from to where
     Rel { vertical: true,  immediate: false } -> Descendant
     Rel { vertical: false, immediate: true }  -> Next
     Rel { vertical: false, immediate: false } -> Later
+
+distribute :: forall a. InterTsil Relation a -> Related (Related a)
+distribute = lmap (view relIso) >>> distribute'
+
+distribute' :: forall a. InterTsil Rel a -> Related (Related a)
+distribute' (One a) = Related (One (Related (One a)))
+distribute' (More m (Rel { vertical, immediate }) a) =
+  case distribute' m, not immediate, vertical of
+    Related rest, rel, true -> Related (More rest rel (Related (One a)))
+    Related (One (Related rest)), rel, false -> Related (One (Related (More rest rel a)))
+    Related (More x y (Related rest)), rel, false -> Related (More x y (Related (More rest rel a)))
 
 -- | An attribute name and specifics about how to match it, where `Nothing`
 -- | means it simply must exist.
@@ -430,8 +442,8 @@ instance combinatorialRelated :: Combinatorial a => Combinatorial (Related a) wh
 instance subsumesRelated :: Subsumes a => Subsumes (Related a) where
   subsumes (Related a) (Related b) = case a, b of
     One s1, One s2 -> subsumes s1 s2
-    One s1, More m2 r2 s2 -> LSR <> subsumes s1 s2
-    More m1 r1 s1, One s2 -> RSL <> subsumes s1 s2
+    One s1, More _ _ s2 -> LSR <> subsumes s1 s2
+    More _ _ s1, One s2 -> RSL <> subsumes s1 s2
     More m1 r1 s1, More m2 r2 s2 ->
       subsumes (Related m1) (Related m2) <>
       subsumes s1 s2 <>
