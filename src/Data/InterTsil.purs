@@ -5,11 +5,11 @@ import Data.Bitraversable (class Bifoldable, class Bitraversable, bifoldMap, bif
 import Data.Either (Either(..))
 import Data.Lens (Lens', lens')
 import Data.Monoid (mempty)
-import Data.Semigroup.Foldable (class Foldable1, fold1Default, foldMap1)
+import Data.Semigroup.Foldable (class Foldable1, foldMap1, foldl1Default, foldr1Default)
 import Data.Semigroup.Traversable (class Traversable1, sequence1Default, traverse1)
 import Data.Traversable (class Foldable, class Traversable)
 import Data.Tuple (Tuple(..))
-import Prelude (class Eq, class Functor, class Ord, flip, id, pure, (<$>), (<*>), (<>), (<@>))
+import Prelude (class Eq, class Functor, class Ord, flip, identity, pure, (<$>), (<*>), (<>), (<@>))
 
 data InterTsil a b = One b | More (InterTsil a b) a b
 derive instance eqInterTsil :: (Eq a, Eq b) => Eq (InterTsil a b)
@@ -24,7 +24,8 @@ instance bifunctorInterTsil :: Bifunctor InterTsil where
 instance foldable1InterTsil :: Foldable1 (InterTsil a) where
   foldMap1 g (One b) = g b
   foldMap1 g (More m _ b) = foldMap1 g m <> g b
-  fold1 x = fold1Default x
+  foldl1 x = foldl1Default x
+  foldr1 x = foldr1Default x
 instance foldableInterTsil :: Foldable (InterTsil a) where
   foldMap = bifoldMap mempty
   foldl = bifoldl pure
@@ -41,7 +42,7 @@ instance traversable1InterTsil :: Traversable1 (InterTsil a) where
   sequence1 x = sequence1Default x
 instance traversableInterTsil :: Traversable (InterTsil a) where
   traverse = bitraverse pure
-  sequence = bitraverse pure id
+  sequence = bitraverse pure identity
 instance bitraversableInterTsil :: Bitraversable InterTsil where
   bitraverse _ g (One b) = One <$> g b
   bitraverse f g (More m a b) = More <$> bitraverse f g m <*> f a <*> g b

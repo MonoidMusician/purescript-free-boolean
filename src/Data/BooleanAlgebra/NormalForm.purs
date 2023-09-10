@@ -37,10 +37,10 @@ instance showNF :: (Show a, Ord a) => Show (NormalForm a) where
 type AsSetMap a = S.Set (M.Map a Boolean)
 type AsArrays a = Array (Array (Tuple a Boolean))
 
-asArray = id :: Array ~> Array
+asArray = identity :: Array ~> Array
 
 toArrays :: forall a. Ord a => AsSetMap a -> AsArrays a
-toArrays = S.toUnfoldable >>> map M.toAscUnfoldable
+toArrays = S.toUnfoldable >>> map M.toUnfoldable
 
 fromArrays :: forall a. Ord a => AsArrays a -> AsSetMap a
 fromArrays = bindFlipped (TF.oneOfMap pure <<< inner) >>> S.fromFoldable where

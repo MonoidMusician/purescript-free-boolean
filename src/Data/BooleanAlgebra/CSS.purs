@@ -15,15 +15,17 @@ import Data.InterTsil (InterTsil(..), concat)
 import Data.Lens (Iso', iso)
 import Data.Map (Map, singleton, unionWith)
 import Data.Maybe (Maybe(..))
-import Data.Monoid (class Monoid, mempty)
 import Data.Newtype (class Newtype, un, unwrap)
-import Data.Record (get, insert)
 import Data.Set as Set
 import Data.String (joinWith)
-import Data.Symbol (class IsSymbol, SProxy(..))
+import Data.Symbol (class IsSymbol)
 import Data.Traversable (class Foldable, sequence)
 import Data.Tuple (Tuple(..))
-import Type.Row (class ListToRow, class RowLacks, class RowToList, Cons, Nil, RLProxy(..), RProxy(..), kind RowList)
+import Prim.Row as Row
+import Prim.RowList (class RowToList, Cons, Nil, RowList)
+import Record (get, insert)
+import Type.Proxy (Proxy(..))
+import Type.RowList (class ListToRow)
 
 -- | A single portion of a selector. Covers atoms such as matching an element
 -- | or class.
@@ -291,8 +293,8 @@ instance combinatorialRecord ::
   ( RowToList r rl
   , CombinatorialRL rl r r
   ) => Combinatorial (Record r) where
-    combine = combineRL (RLProxy :: RLProxy rl)
-    neutral = neutralRL (RLProxy :: RLProxy rl) (RProxy :: RProxy r)
+    combine = combineRL (Proxy :: Proxy rl)
+    neutral = neutralRL (Proxy :: Proxy rl) (Proxy :: Proxy r)
 
 -- Conjoin many conjunctive clauses together, doing case analysis as necesssary
 -- or dropping impossible conjunctions.
@@ -306,9 +308,9 @@ combineFold = foldl (\fb a -> fb >>= \b -> combine b a) (pure neutral)
 combine3 :: forall f c. Combinatorial c => MonadPlus f => c -> c -> c -> f c
 combine3 a b c = combine a b >>= combine c -- combine a b >>= (combine <@> c)
 
-class ListToRow rl r <= CombinatorialRL (rl :: RowList) (rr :: # Type) (r :: # Type) | rl -> r where
-  combineRL :: forall f. MonadPlus f => RLProxy rl -> Record rr -> Record rr -> f (Record r)
-  neutralRL :: RLProxy rl -> RProxy rr -> Record r
+class ListToRow rl r <= CombinatorialRL (rl :: RowList Type) (rr :: Row Type) (r :: Row Type) | rl -> r where
+  combineRL :: forall f. MonadPlus f => Proxy rl -> Record rr -> Record rr -> f (Record r)
+  neutralRL :: Proxy rl -> Proxy rr -> Record r
 
 instance combNil :: CombinatorialRL Nil rr () where
   combineRL _ _ _ = pure {}
@@ -317,17 +319,17 @@ instance combCons ::
   ( IsSymbol s
   , Combinatorial t
   , CombinatorialRL rl rr r
-  , RowCons s t r r'
-  , RowLacks s r
-  , RowCons s t ignored rr
+  , Row.Cons s t r r'
+  , Row.Lacks s r
+  , Row.Cons s t ignored rr
   ) => CombinatorialRL (Cons s t rl) rr r' where
     combineRL _ r1 r2 = insert s
       <$> combine (get s r1) (get s r2)
-      <*> ofRecordr (combineRL (RLProxy :: RLProxy rl) r1 r2)
+      <*> ofRecordr (combineRL (Proxy :: Proxy rl) r1 r2)
       where
-        ofRecordr = id :: forall f. f (Record r) -> f (Record r)
-        s = SProxy :: SProxy s
-    neutralRL _ rp = insert (SProxy :: SProxy s) neutral (neutralRL (RLProxy :: RLProxy rl) rp :: Record r)
+        ofRecordr = identity :: forall f. f (Record r) -> f (Record r)
+        s = Proxy :: Proxy s
+    neutralRL _ rp = insert (Proxy :: Proxy s) neutral (neutralRL (Proxy :: Proxy rl) rp :: Record r)
 
 instance combinatorialUnit :: Combinatorial Unit where
   combine _ _ = pure neutral
@@ -383,7 +385,7 @@ instance subsumesSingle :: Eq a => Subsumes (Single a) where
       | otherwise -> I
 
 instance combinatorialSeveral :: Ord a => Combinatorial (Several a) where
-  neutral = Several mempty
+  neutral = Several empty
   combine (Several a) (Several b) =
     oneOfMap (pure <<< Several) $ sequence $
       unionWith agreement (a <#> Just) (b <#> Just)
