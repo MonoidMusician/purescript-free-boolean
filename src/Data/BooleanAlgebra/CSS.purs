@@ -13,7 +13,7 @@ import Data.Foldable (all, foldMap, foldl, oneOfMap)
 import Data.FoldableWithIndex (foldMapWithIndex, foldlWithIndex)
 import Data.HeytingAlgebra (ff, tt)
 import Data.InterTsil (InterTsil(..), concat)
-import Data.Lens (Iso', iso, view)
+import Data.Lens (Iso', Prism', iso, preview, prism', view)
 import Data.Map (Map, singleton, unionWith)
 import Data.Maybe (Maybe(..))
 import Data.Newtype (class Newtype, un, unwrap)
@@ -87,6 +87,14 @@ newtype AttrMatch = AttrMatch
 
 derive instance eqAttrMatch :: Eq AttrMatch
 derive instance ordAttrMatch :: Ord AttrMatch
+
+idMatch :: Prism' AttrMatch String
+idMatch = prism'
+  do
+    \value -> AttrMatch { attr: "id", match: Just (MatchValue { value, matchType: Exact, insensitive: false }) }
+  case _ of
+    AttrMatch { attr: "id", match: Just (MatchValue { value, matchType: Exact, insensitive: false }) } -> Just value
+    _ -> Nothing
 
 -- | Specifics about how to match the value of an attribute.
 newtype MatchValue = MatchValue
@@ -476,6 +484,9 @@ printVert (Related (More m r h)) =
   <> (if r then " " else " > ")
   <> printHoriz h
 
+printVerts :: Array Vert -> String
+printVerts = ensure "*" <<< joinWith ", " <<< map printVert
+
 -- A disjunction of Several selectors
 type SomeSelectors = Array Atom
 
@@ -553,9 +564,11 @@ print1 (Atom v) = ensure "*" $ e <> as <> c <> pc <> pe where
     Single (Just { inverted, value }) ->
       invert inverted value
   -- Print attributes in brackets[]
-  as = v.attrs # unwrap # foldMapWithIndex \(AttrMatch { attr, match }) i ->
+  as = v.attrs # unwrap # foldMapWithIndex \attrMatch@(AttrMatch { attr, match }) i ->
     invert i case match of
       Nothing -> "[" <> attr <> "]"
+      _ | Just id <- preview idMatch attrMatch ->
+        "#" <> id
       Just (MatchValue { matchType, value, insensitive }) ->
         let
           i' = if insensitive then " i" else ""
